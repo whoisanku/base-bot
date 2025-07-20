@@ -15,7 +15,7 @@ import time
 import json
 from dotenv import load_dotenv
 from web3 import Web3, Account
-from web3.middleware import geth_poa_middleware
+# geth_poa_middleware was removed in web3.py 7.x; Base chain does not require it
 import requests
 from eth_account.messages import encode_defunct
 
@@ -48,8 +48,8 @@ if not all([PRIVATE_KEY, SMART_WALLET_ADDRESS]):
     exit(1)
 
 # Uniswap and ERC-4337 Contract Addresses (for Base Mainnet)
-# EntryPoint v0.6.0, as seen in the user's transaction
-ENTRY_POINT_ADDRESS = "0x5FF137D4b0FDCD49DcA30c7CF57E578a026d2789"
+# EntryPoint v0.7.0 on Base mainnet
+ENTRY_POINT_ADDRESS = "0x0000000071727De22E5E9d8BAf0edAc6f37da032"
 # This is a placeholder for the Uniswap v4 Pool Manager.
 # You may need to find the correct address for the specific pool.
 # Universal Router (v4) on Base mainnet
@@ -69,7 +69,7 @@ ERC20_ABI = json.loads("""
 ]
 """)
 
-# ABI for the ERC-4337 EntryPoint contract
+# ABI for the ERC-4337 EntryPoint contract (v0.7)
 ENTRY_POINT_ABI = json.loads("""
 [
   {
@@ -78,14 +78,18 @@ ENTRY_POINT_ABI = json.loads("""
         "components": [
           {"name": "sender", "type": "address"},
           {"name": "nonce", "type": "uint256"},
-          {"name": "initCode", "type": "bytes"},
+          {"name": "factory", "type": "address"},
+          {"name": "factoryData", "type": "bytes"},
           {"name": "callData", "type": "bytes"},
           {"name": "callGasLimit", "type": "uint256"},
           {"name": "verificationGasLimit", "type": "uint256"},
           {"name": "preVerificationGas", "type": "uint256"},
           {"name": "maxFeePerGas", "type": "uint256"},
           {"name": "maxPriorityFeePerGas", "type": "uint256"},
-          {"name": "paymasterAndData", "type": "bytes"},
+          {"name": "paymaster", "type": "address"},
+          {"name": "paymasterData", "type": "bytes"},
+          {"name": "paymasterVerificationGasLimit", "type": "uint256"},
+          {"name": "paymasterPostOpGasLimit", "type": "uint256"},
           {"name": "signature", "type": "bytes"}
         ],
         "name": "ops",
@@ -111,14 +115,18 @@ ENTRY_POINT_ABI = json.loads("""
         "components": [
           {"name": "sender", "type": "address"},
           {"name": "nonce", "type": "uint256"},
-          {"name": "initCode", "type": "bytes"},
+          {"name": "factory", "type": "address"},
+          {"name": "factoryData", "type": "bytes"},
           {"name": "callData", "type": "bytes"},
           {"name": "callGasLimit", "type": "uint256"},
           {"name": "verificationGasLimit", "type": "uint256"},
           {"name": "preVerificationGas", "type": "uint256"},
           {"name": "maxFeePerGas", "type": "uint256"},
           {"name": "maxPriorityFeePerGas", "type": "uint256"},
-          {"name": "paymasterAndData", "type": "bytes"},
+          {"name": "paymaster", "type": "address"},
+          {"name": "paymasterData", "type": "bytes"},
+          {"name": "paymasterVerificationGasLimit", "type": "uint256"},
+          {"name": "paymasterPostOpGasLimit", "type": "uint256"},
           {"name": "signature", "type": "bytes"}
         ],
         "name": "userOp",
@@ -157,16 +165,9 @@ class UniswapV4Trader:
         if not self.web3.is_connected():
             raise ConnectionError("Failed to connect to Base RPC")
         
-        # Add POA middleware for Base chain
-        self.web3.middleware_onion.inject(geth_poa_middleware, layer=0)
         # EntryPoint & signer
         self.entry_point = self.web3.eth.contract(address=ENTRY_POINT_ADDRESS, abi=ENTRY_POINT_ABI)
         self.signer = Account.from_key(PRIVATE_KEY)
-        
-        self.signer = Account.from_key(PRIVATE_KEY)
-        self.entry_point = self.web3.eth.contract(
-            address=ENTRY_POINT_ADDRESS, abi=ENTRY_POINT_ABI
-        )
 
     def get_nonce(self):
         """Get the next nonce for the smart wallet from the EntryPoint."""
@@ -230,18 +231,22 @@ class UniswapV4Trader:
         return router_calldata
 
     def _user_op_to_tuple(self, user_op_dict):
-        """Convert dict to the tuple struct expected by EntryPoint ABI."""
+        """Convert dict to the tuple struct expected by EntryPoint v0.7 ABI."""
         return (
             Web3.to_checksum_address(user_op_dict["sender"]),
             int(user_op_dict["nonce"]),
-            Web3.to_bytes(hexstr=user_op_dict["initCode"]),
+            Web3.to_checksum_address(user_op_dict["factory"]),
+            Web3.to_bytes(hexstr=user_op_dict["factoryData"]),
             Web3.to_bytes(hexstr=user_op_dict["callData"]),
             int(user_op_dict["callGasLimit"]),
             int(user_op_dict["verificationGasLimit"]),
             int(user_op_dict["preVerificationGas"]),
             int(user_op_dict["maxFeePerGas"]),
             int(user_op_dict["maxPriorityFeePerGas"]),
-            Web3.to_bytes(hexstr=user_op_dict["paymasterAndData"]),
+            Web3.to_checksum_address(user_op_dict["paymaster"]),
+            Web3.to_bytes(hexstr=user_op_dict["paymasterData"]),
+            int(user_op_dict["paymasterVerificationGasLimit"]),
+            int(user_op_dict["paymasterPostOpGasLimit"]),
             Web3.to_bytes(hexstr=user_op_dict["signature"]),
         )
 
@@ -276,8 +281,8 @@ class UniswapV4Trader:
         print("entry point address", ENTRY_POINT_ADDRESS, formatted, is_biconomy)
 
         if is_biconomy:
-            # 💡 Biconomy expects the *envelope* object
-            payload_params = [formatted, ENTRY_POINT_ADDRESS]
+            # 💡 Biconomy expects a wrapped object
+            payload_params = [{"userOperation": formatted, "entryPointAddress": ENTRY_POINT_ADDRESS}]
         else:
             # Stackup / Pimlico / Alchemy style (array)
             payload_params = [formatted, ENTRY_POINT_ADDRESS]
@@ -340,15 +345,19 @@ class UniswapV4Trader:
         user_op = {
             "sender": SMART_WALLET_ADDRESS,
             "nonce": nonce,
-            "initCode": "0x", # Should be '0x' if wallet is already deployed
+            "factory": "0x0000000000000000000000000000000000000000",
+            "factoryData": "0x",
             "callData": call_data,
-            "callGasLimit": 500_000, # Placeholder
-            "verificationGasLimit": 200_000, # Placeholder
-            "preVerificationGas": 50_000, # Placeholder
-            "maxFeePerGas": self.web3.to_wei('2', 'gwei'), # Placeholder
-            "maxPriorityFeePerGas": self.web3.to_wei('1', 'gwei'), # Placeholder
-            "paymasterAndData": "0x", # No paymaster
-            "signature": "0x" # Will be added after signing
+            "callGasLimit": 500_000,  # Placeholder
+            "verificationGasLimit": 200_000,  # Placeholder
+            "preVerificationGas": 50_000,  # Placeholder
+            "maxFeePerGas": self.web3.to_wei("2", "gwei"),  # Placeholder
+            "maxPriorityFeePerGas": self.web3.to_wei("1", "gwei"),  # Placeholder
+            "paymaster": "0x0000000000000000000000000000000000000000",
+            "paymasterData": "0x",
+            "paymasterVerificationGasLimit": 0,
+            "paymasterPostOpGasLimit": 0,
+            "signature": "0x",  # Will be added after signing
         }
         
         # 4. Sign the UserOperation (this part is complex and requires hashing off-chain)
