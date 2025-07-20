@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 from dotenv import load_dotenv
 from web3 import Web3
+from uniswap_v4_trader import UniswapV4Trader
 
 # Get the absolute path to the .env file
 dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
@@ -33,6 +34,7 @@ RPC_URL = "https://mainnet.base.org"
 CHAIN_ID = 8453  # Base Mainnet
 POLLING_INTERVAL = 2  # Polling interval in seconds
 TARGET_ADDRESS = "0xA3296bAEB33c2D5dF1AB417E1a805Dd63D8C3BE3".lower()
+ETH_TO_SPEND = 0.00001  # Amount of ETH to spend on the new token
 
 # ERC20 Transfer event signature
 ERC20_TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -47,7 +49,13 @@ class BaseTokenMonitor:
         self.web3 = Web3(Web3.HTTPProvider(RPC_URL))
         if not self.web3.is_connected():
             raise ConnectionError("Failed to connect to Base RPC")
-        
+        # Initialize the trader
+        try:
+            self.trader = UniswapV4Trader()
+        except Exception as e:
+            print(f"Error initializing UniswapV4Trader: {e}")
+            print("Please ensure your .env file is set up correctly with PRIVATE_KEY and SMART_WALLET_ADDRESS.")
+            exit(1)
 
     def _make_rpc_request(self, method, params=None):
         """Helper function to make JSON-RPC requests with retries and error handling."""
@@ -165,26 +173,25 @@ class BaseTokenMonitor:
             print(f"Error validating transfer: {e}")
             return False
 
-
-    def _format_transfer_log(self, log):
-        """Format a transfer log into a readable string and trigger buy."""
+    def _process_transfer_log(self, log):
+        """Format a transfer log, print it, and trigger the buy function."""
         try:
             # Extract transfer details
             block_number = int(log.get('blockNumber', '0x0'), 16)
             tx_hash = log.get('transactionHash', '0x')
             token_address = log.get('address', '0x')
             
-            # Parse topics (from, to, tokenId for ERC721, or value for ERC20)
+            # Parse topics (from, to)
             topics = log.get('topics', [])
             from_address = '0x' + topics[1][-40:] if len(topics) > 1 else '0x0'
             to_address = '0x' + topics[2][-40:] if len(topics) > 2 else '0x0'
             
-            # Parse amount from data (for ERC20)
+            # Parse amount from data
             amount = 0
             if log.get('data') and log['data'] != '0x':
                 amount = int(log['data'].replace('0x', ''), 16)
             
-            # Format the output
+            # Format and print the output
             output = [
                 "\n" + "=" * 80,
                 f"  🚨 LARGE TOKEN TRANSFER DETECTED 🚨",
@@ -197,22 +204,61 @@ class BaseTokenMonitor:
                 f"  Amount: {amount:,} (raw)",
                 "=" * 80 + "\n"
             ]
-            
-            return "\n".join(output)
-            
+            print("\n".join(output))
+
+            # --- Trigger the token purchase ---
+            print(f"\n>>> Initiating purchase of token {token_address}...\n")
+            self.trader.buy_token(token_address, ETH_TO_SPEND)
+
         except Exception as e:
-            print(f"Error formatting log: {e}")
-            return str(log)
+            print(f"Error processing transfer log: {e}")
+
+    def run(self):
+        """Main monitoring loop."""
+        print("Starting Base Token Monitor...")
+        while True:
+            try:
+                latest_block = self.get_latest_block()
+                if latest_block is None:
+                    time.sleep(POLLING_INTERVAL)
+                    continue
+
+                # To avoid requesting too many blocks at once on the first run
+                if latest_block > self.last_block + 1000:
+                    self.last_block = latest_block - 1000
+
+                if self.last_block < latest_block:
+                    print(f"Scanning blocks from {self.last_block + 1} to {latest_block}...")
+                    logs = self.get_token_transfer_logs(self.last_block + 1, latest_block)
+                    
+                    if logs:
+                        for log in logs:
+                            self._process_transfer_log(log)
+                    
+                    self.last_block = latest_block
+                    self._save_last_block(self.last_block)
+                
+                time.sleep(POLLING_INTERVAL)
+
+            except KeyboardInterrupt:
+                print("\nShutting down monitor.")
+                break
+            except Exception as e:
+                print(f"An error occurred in the main loop: {e}")
+                time.sleep(10) # Wait longer after an error
+
+
+if __name__ == "__main__":
+    monitor = BaseTokenMonitor(api_key=API_KEY)
+    monitor.run()
 
     def monitor_transfers(self):
         """Continuously monitor for new blocks and parse token transfers."""
         print("🚀 Starting Base Chain Token Transfer Monitor...")
-        print(f"🔗 Chain ID: {CHAIN_ID} (Base Mainnet)")
         print(f"🎯 Monitoring address: {TARGET_ADDRESS}")
         print(f"📊 Minimum amount: {MIN_TOKEN_AMOUNT:,} (raw)")
         print(f"⏱️  Polling interval: {POLLING_INTERVAL} second(s)")
         print("-" * 80)
-
         # Initialize last_block if not set
         if self.last_block is None:
             self.last_block = self.get_latest_block() or 0
