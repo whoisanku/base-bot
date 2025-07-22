@@ -9,8 +9,13 @@ import { exec } from "child_process";
 // ────────────────────────────────────────────────────────────
 const { RPC_URL } = process.env;
 const POLLING_INTERVAL = 2000; // 2 seconds
-const TARGET_ADDRESS =
-  "0xA3296bAEB33c2D5dF1AB417E1a805Dd63D8C3BE3".toLowerCase();
+// List of whitelisted target addresses (lower-case)
+const WHITELISTED_ADDRESSES: string[] = [
+  "0x2211d1D0020DAEA8039E46Cf1367962070d77DA9",
+  "0x2B886875D17c51b3Cde74623D06e315f2994fA64",
+  // "0xA3296bAEB33c2D5dF1AB417E1a805Dd63D8C3BE3",
+  // Add more addresses below.
+].map((a) => a.toLowerCase());
 const MIN_TOKEN_AMOUNT = 10_000_000n * 10n ** 18n; // 10M tokens with 18 decimals
 
 // ────────────────────────────────────────────────────────────
@@ -26,22 +31,33 @@ async function getLatestBlock() {
 }
 
 async function getTokenTransferLogs(fromBlock: bigint, toBlock: bigint) {
-  return await publicCli.getLogs({
-    address: undefined, // All addresses
-    event: parseAbiItem(
-      "event Transfer(address indexed from, address indexed to, uint256 value)"
-    ),
-    args: {
-      to: TARGET_ADDRESS as `0x${string}`,
-    },
-    fromBlock,
-    toBlock,
-  });
+  const allLogs: any[] = [];
+  for (const target of WHITELISTED_ADDRESSES) {
+    try {
+      const logs = await publicCli.getLogs({
+        address: undefined,
+        event: parseAbiItem(
+          "event Transfer(address indexed from, address indexed to, uint256 value)"
+        ),
+        args: {
+          to: target as `0x${string}`,
+        },
+        fromBlock,
+        toBlock,
+      });
+      // annotate with target for debugging
+      logs.forEach((l: any) => (l.targetAddress = target));
+      allLogs.push(...logs);
+    } catch (err) {
+      console.error(`Error fetching logs for ${target}:`, err);
+    }
+  }
+  return allLogs;
 }
 
 function isValidTransfer(log: any) {
-  const value = log.args.value;
-  return value >= MIN_TOKEN_AMOUNT;
+  const value = log.args?.value;
+  return value !== undefined && value >= MIN_TOKEN_AMOUNT;
 }
 
 function triggerBuy(tokenAddress: string) {
@@ -72,10 +88,12 @@ async function run() {
         );
         const logs = await getTokenTransferLogs(lastBlock + 1n, latestBlock);
 
-        if (logs) {
+        if (logs && logs.length) {
           for (const log of logs) {
             if (isValidTransfer(log)) {
-              console.log(`Valid transfer found:`, log);
+              console.log(`✅ Valid transfer to ${log.targetAddress} found.`);
+              console.log(`   Token: ${log.address}`);
+              console.log(`   Amount: ${log.args.value.toString()}`);
               triggerBuy(log.address);
             }
           }

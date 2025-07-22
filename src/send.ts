@@ -32,7 +32,7 @@ if (buyTokenArgIndex !== -1 && process.argv.length > buyTokenArgIndex + 1) {
 } else {
   throw new Error("❌ Missing --buy-token address argument.");
 }
-const AMOUNT_ETH = 0.00001; // default if selling ETH
+const AMOUNT_ETH = 0.0025; // default if selling ETH
 const AMOUNT_ERC20 = 10; // default if selling ERC‑20
 const ERC20_DEC = 6; // decimals for the ERC‑20 you sell
 const SELL_ERC20 = process.argv.includes("--erc20");
@@ -191,6 +191,64 @@ try {
   });
   console.log("UserOp:", hash);
   console.log(`Track ➜ https://base.blockscout.com/tx/${hash}`);
+
+  // ────────────────────────────────────────────────────────────
+  // Wait for buy transaction confirmation
+  // ────────────────────────────────────────────────────────────
+  console.log("Waiting for buy transaction to be mined …");
+  const buyReceipt = await publicCli.waitForTransactionReceipt({ hash });
+  console.log(`✅ Buy mined in block ${buyReceipt.blockNumber}`);
+
+  // ────────────────────────────────────────────────────────────
+  // Transfer acquired tokens from Smart Account to EOA
+  // ────────────────────────────────────────────────────────────
+  const erc20Abi = parseAbi([
+    "function balanceOf(address) view returns (uint256)",
+    "function transfer(address,uint256) returns (bool)",
+  ]);
+
+  const tokenBalance = (await publicCli.readContract({
+    address: CONTENT_TOKEN as Address,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [simpleAcc.address],
+  })) as bigint;
+
+  console.log(`Smart account holds ${tokenBalance.toString()} tokens`);
+  if (tokenBalance === 0n) {
+    console.error("❌ No tokens to transfer – exiting.");
+    process.exit(0);
+  }
+
+  const transferCalldata = encodeFunctionData({
+    abi: erc20Abi,
+    functionName: "transfer",
+    args: [eoa.address as Address, tokenBalance],
+  });
+
+  const transferGas = await publicCli.estimateGas({
+    account: simpleAcc.address,
+    to: CONTENT_TOKEN as Address,
+    data: transferCalldata,
+    value: 0n,
+  });
+  const paddedTransferGas = transferGas + transferGas / 5n;
+
+  const gasPrices2 = await getUserOperationGasPrice(saClient as any);
+
+  const transferHash = await saClient.sendTransaction({
+    to: CONTENT_TOKEN as Address,
+    data: transferCalldata,
+    value: 0n,
+    gas: paddedTransferGas,
+    maxFeePerGas: gasPrices2.standard.maxFeePerGas,
+    maxPriorityFeePerGas: gasPrices2.standard.maxPriorityFeePerGas,
+  });
+  console.log("Transfer UserOp:", transferHash);
+  console.log(`Track transfer ➜ https://base.blockscout.com/tx/${transferHash}`);
+
+  await publicCli.waitForTransactionReceipt({ hash: transferHash });
+  console.log("✅ Token transfer confirmed!");
 } catch (err) {
   console.error("Simulation / bundler error:", err);
   process.exit(1);
