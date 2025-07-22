@@ -1,3 +1,7 @@
 venv
 .env
 __pycache__
+.vscode
+node_modules
+dist
+package-lock.json

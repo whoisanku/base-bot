@@ -1,0 +1,23 @@
+{
+  "name": "base-bot",
+  "version": "1.0.0",
+  "description": "A collection of Python tools for interacting with tokens on the Base blockchain (Chain ID: 8453).",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "build": "tsc",
+    "start": "node dist/src/monitor.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/node": "^24.0.15",
+    "@zoralabs/coins-sdk": "^0.2.8",
+    "dotenv": "^17.2.0",
+    "permissionless": "^0.2.52",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3",
+    "viem": "^2.33.0"
+  }
+}
