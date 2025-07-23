@@ -57,7 +57,7 @@ async function getTokenTransferLogs(fromBlock: bigint, toBlock: bigint) {
 
 function isValidTransfer(log: any) {
   const value = log.args?.value;
-  return value !== undefined && value >= MIN_TOKEN_AMOUNT;
+  return value !== undefined && value == MIN_TOKEN_AMOUNT;
 }
 
 function triggerBuy(tokenAddress: string) {

